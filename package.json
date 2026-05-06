@@ -1,0 +1,24 @@
+{
+  "name": "suzielaw",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OSS legal-AI platform built on Team Suzie — open alternative to Harvey",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "deps:build": "cd ../open_teamsuzie && pnpm -r --filter './packages/**' build",
+    "dev": "pnpm --filter @suzielaw/assistant dev",
+    "dev:full": "bash scripts/dev-up.sh",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+node_modules
+dist
+.env
+.env.local
+*.tsbuildinfo
+.DS_Store
+.pnpm-store
+.vite
+.dev-logs/
+apps/*/data/
+*.db
+*.db-journal
+
+# Internal parity-tracking docs — kept locally, not in version control
+apps/suzielaw/PARITY-PLAN.md
+apps/suzielaw/PARITY-DELTA.md
+apps/suzielaw/HANDOFF.md
+apps/suzielaw/PRESS-KIT.md
+apps/suzielaw/PRESS-KIT.docx

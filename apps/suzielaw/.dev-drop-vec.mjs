@@ -1,0 +1,10 @@
+import * as sqliteVec from '/Users/mattsinalco/mathias/apps/open_teamsuzie/node_modules/.pnpm/sqlite-vec@0.1.9/node_modules/sqlite-vec/index.mjs';
+import Database from 'better-sqlite3';
+const db = new Database('/Users/mattsinalco/mathias/apps/suzielaw/apps/suzielaw/data/suzielaw.db');
+sqliteVec.load(db);
+const before = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'kb_chunk_vectors%'").all().map(r => r.name);
+console.log('Before:', before);
+db.exec('DROP TABLE IF EXISTS kb_chunk_vectors;');
+const after = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'kb_chunk_vectors%'").all().map(r => r.name);
+console.log('After:', after);
+db.close();
