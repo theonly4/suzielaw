@@ -29,6 +29,7 @@
     "@teamsuzie/hosted-demo": "link:../../../open_teamsuzie/packages/hosted-demo",
     "@teamsuzie/workflows": "link:../../../open_teamsuzie/packages/workflows",
     "@teamsuzie/workspaces": "link:../../../open_teamsuzie/packages/workspaces",
+    "@teamsuzie/platform-bridge": "link:../../../open_teamsuzie/packages/platform-bridge",
     "cookie-session": "^2.1.0",
     "cors": "^2.8.5",
     "dotenv": "^16.6.0",

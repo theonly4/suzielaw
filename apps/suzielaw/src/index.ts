@@ -20,6 +20,12 @@ import {
 import { config } from './config.js';
 import { createAuthRouter, createSessionMiddleware, getSessionUser, requireAuth } from './auth.js';
 import {
+    createPlatformRequestMiddleware,
+    createWebhookRouter,
+    registerWithPlatform,
+    type PlatformBridgeConfig,
+} from '@teamsuzie/platform-bridge';
+import {
   createCsrfMiddleware,
   createOAuthRouter,
   createTokenMeteredFetch,
@@ -36,6 +42,7 @@ import {
 import { InMemoryDocumentStore } from '@teamsuzie/markdown-document';
 import { buildDocumentTools } from './document-tools.js';
 import { buildCourtListenerTools } from './tools/courtlistener.js';
+import { buildInfolegTools } from './tools/infoleg.js';
 import { buildDiffTools } from './tools/diff.js';
 import { buildProposeEditsTools } from './tools/propose-edits.js';
 import { buildFindInDocumentTools } from './tools/find-in-document.js';
@@ -98,6 +105,11 @@ if (courtListenerTools.length > 0) {
       .map((t) => t.name)
       .join(', ')}`,
   );
+}
+
+const infolegTools = buildInfolegTools();
+if (infolegTools.length > 0) {
+  console.log(`Infoleg tools enabled: ${infolegTools.map((t) => t.name).join(', ')}`);
 }
 
 const personaRegistry = new PersonaRegistry({
@@ -185,7 +197,7 @@ const matterRag = new MatterRag({
 });
 
 function activeTools(): AnyToolDefinition[] {
-  const out: AnyToolDefinition[] = [...builtInTools, ...courtListenerTools, ...templateTools, ...mcp.tools];
+  const out: AnyToolDefinition[] = [...builtInTools, ...courtListenerTools, ...infolegTools, ...templateTools, ...mcp.tools];
   if (kbSearchTool) out.push(kbSearchTool as unknown as AnyToolDefinition);
   return out;
 }
@@ -796,7 +808,31 @@ app.get('/api/token-budget', requireAuth, (req, res) => {
   res.json({ tokenBudget: tokenBudget.getSummary(ownerEmail) });
 });
 
-app.post('/api/chat', requireAuth, async (req, res) => {
+// Platform bridge config for mothership integration
+const platformBridgeConfig: PlatformBridgeConfig = {
+    platformToken: config.platform?.token,
+};
+
+// Webhook endpoint for mothership (install/uninstall/dm/ping)
+if (config.platform?.token) {
+    app.use('/api/webhook/mothership', createWebhookRouter(platformBridgeConfig, {
+        onInstall: async (ctx) => {
+            console.log(`[SUZIELAW] Installed by org ${ctx.org_id}, agent_id=${ctx.agent_id}`);
+        },
+        onUninstall: async (ctx) => {
+            console.log(`[SUZIELAW] Uninstalled by org ${ctx.org_id}`);
+        },
+        onDirectMessage: async (ctx) => {
+            // TODO: run agent-loop with the DM and return response
+            return { response: `Received message from ${ctx.from_agent.name}: "${ctx.message}"` };
+        },
+    }));
+}
+
+// Platform-proxied requests bypass session auth via virtual session
+const validatePlatformRequest = createPlatformRequestMiddleware(platformBridgeConfig);
+
+app.post('/api/chat', validatePlatformRequest, requireAuth, async (req, res) => {
   const message = String(req.body?.message || '').trim();
   const history = Array.isArray(req.body?.history) ? (req.body.history as ChatMessage[]) : [];
   const sessionId = String(req.body?.sessionId || '').trim();
@@ -1050,7 +1086,7 @@ app.post('/api/chat', requireAuth, async (req, res) => {
   // Persona's system prompt replaces the default Counsel prompt; skills always
   // append; allowedTools/blockedTools filters the tool set for this turn.
   const turnConfig = applyPersona({
-    defaultSystemPrompt: config.agent.systemPrompt,
+    defaultSystemPrompt: config.agent.systemPrompt.replace('{{DATE}}', new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })),
     skillSystemPrompt: skillState.systemPrompt,
     tools: turnTools,
     persona,
@@ -1699,6 +1735,25 @@ async function main(): Promise<void> {
   rebuildToolCtx();
   await bootstrapMcp();
   await bootstrapTemplates();
+
+  // Register with mothership marketplace on startup (if configured)
+  if (config.platform?.url) {
+    registerWithPlatform(
+      { platformUrl: config.platform.url, registrationToken: config.platform.registrationToken },
+      {
+        slug: 'suzielaw',
+        name: 'Suzie Law',
+        description: 'Open-source AI legal assistant — research, drafting, document review',
+        provider_name: 'Team Suzie',
+        base_url: config.publicUrl,
+        health_endpoint: '/api/health',
+        chat_endpoint: '/api/chat',
+        webhook_endpoint: '/api/webhook/mothership',
+        capabilities: { tools: ['vector_search', 'courtlistener', 'document_drafting'], features: ['sse_streaming'] },
+        version: '0.1.0',
+      }
+    ).catch(err => console.warn('[SUZIELAW] Platform registration failed:', err.message));
+  }
 
   const server = app.listen(config.port, () => {
     console.log(`${config.title} listening on ${config.publicUrl}`);

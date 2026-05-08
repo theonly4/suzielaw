@@ -1,4 +1,3 @@
-import { fileURLToPath, URL } from 'node:url';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -12,11 +11,6 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), tailwindcss()],
-    resolve: {
-      alias: {
-        '@teamsuzie/ui': fileURLToPath(new URL('../../../../open_teamsuzie/packages/ui/src/index.ts', import.meta.url)),
-      },
-    },
     server: {
       port: clientPort,
       fs: {

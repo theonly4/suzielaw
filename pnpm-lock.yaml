@@ -52,6 +52,9 @@ importers:
       '@teamsuzie/personas':
         specifier: link:../../../open_teamsuzie/packages/personas
         version: link:../../../open_teamsuzie/packages/personas
+      '@teamsuzie/platform-bridge':
+        specifier: link:../../../open_teamsuzie/packages/platform-bridge
+        version: link:../../../open_teamsuzie/packages/platform-bridge
       '@teamsuzie/sharing':
         specifier: link:../../../open_teamsuzie/packages/sharing
         version: link:../../../open_teamsuzie/packages/sharing
