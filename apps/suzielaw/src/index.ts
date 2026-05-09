@@ -41,8 +41,7 @@ import {
 } from './files.js';
 import { InMemoryDocumentStore } from '@teamsuzie/markdown-document';
 import { buildDocumentTools } from './document-tools.js';
-import { buildCourtListenerTools } from './tools/courtlistener.js';
-import { buildInfolegTools } from './tools/infoleg.js';
+import { buildLegalResearchTools } from './tools/legal-research/index.js';
 import { buildDiffTools } from './tools/diff.js';
 import { buildProposeEditsTools } from './tools/propose-edits.js';
 import { buildFindInDocumentTools } from './tools/find-in-document.js';
@@ -95,21 +94,16 @@ let skillState: SkillLoadResult = { skills: [], systemPrompt: '', derivedHosts: 
 let mcp: McpManager = { tools: [], status: [], shutdown: async () => {} };
 let templateTools: AnyToolDefinition[] = [];
 
-const courtListenerTools = buildCourtListenerTools({
-  token: config.courtlistener.token,
-  baseUrl: config.courtlistener.baseUrl,
+const legalResearchTools = buildLegalResearchTools({
+  courtListenerToken: config.legalResearch.courtListenerToken,
+  courtListenerBaseUrl: config.legalResearch.courtListenerBaseUrl,
+  pisteClientId: config.legalResearch.pisteClientId,
+  pisteClientSecret: config.legalResearch.pisteClientSecret,
+  judilibreApiKey: config.legalResearch.judilibreApiKey,
+  indianKanoonApiKey: config.legalResearch.indianKanoonApiKey,
 });
-if (courtListenerTools.length > 0) {
-  console.log(
-    `CourtListener tools enabled${config.courtlistener.token ? ' (authenticated)' : ' (unauthenticated; lower rate limits)'}: ${courtListenerTools
-      .map((t) => t.name)
-      .join(', ')}`,
-  );
-}
-
-const infolegTools = buildInfolegTools();
-if (infolegTools.length > 0) {
-  console.log(`Infoleg tools enabled: ${infolegTools.map((t) => t.name).join(', ')}`);
+if (legalResearchTools.length > 0) {
+  console.log(`Legal-research tools enabled: ${legalResearchTools.map((t) => t.name).join(', ')}`);
 }
 
 const personaRegistry = new PersonaRegistry({
@@ -197,7 +191,7 @@ const matterRag = new MatterRag({
 });
 
 function activeTools(): AnyToolDefinition[] {
-  const out: AnyToolDefinition[] = [...builtInTools, ...courtListenerTools, ...infolegTools, ...templateTools, ...mcp.tools];
+  const out: AnyToolDefinition[] = [...builtInTools, ...legalResearchTools, ...templateTools, ...mcp.tools];
   if (kbSearchTool) out.push(kbSearchTool as unknown as AnyToolDefinition);
   return out;
 }
@@ -813,6 +807,47 @@ const platformBridgeConfig: PlatformBridgeConfig = {
     platformToken: config.platform?.token,
 };
 
+// Run a one-shot agent turn for an inter-agent DM. No persona, no workflow,
+// no persisted chat — just the default Counsel system prompt + the standard
+// tool set. The caller (mothership) treats this as a non-streaming HTTP call,
+// so we accumulate chunks into a single string.
+async function runInterAgentTurn(
+    fromAgentName: string,
+    message: string,
+    transcript?: Array<{ from: string; text: string }>,
+): Promise<string> {
+    const agentTarget = resolveAgentTarget(config.agent.model, {}, config.agent);
+    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const systemPrompt = `${config.agent.systemPrompt.replace('{{DATE}}', today)}\n\nYou are responding to another AI agent (${fromAgentName}), not a human end user. Reply concisely and directly.`;
+
+    const messages: ChatMessage[] = [];
+    if (transcript && transcript.length > 0) {
+        const transcriptText = transcript.map(t => `${t.from}: ${t.text}`).join('\n');
+        messages.push({ role: 'user', content: `Conversation so far:\n${transcriptText}\n\n${fromAgentName}: ${message}` });
+    } else {
+        messages.push({ role: 'user', content: `${fromAgentName} says: ${message}` });
+    }
+
+    let assistantText = '';
+    for await (const event of runChatTurn({
+        agent: agentTarget,
+        messages,
+        tools: activeTools(),
+        toolCtx,
+        systemPrompt,
+        maxIterations: config.tools.maxIterations,
+    })) {
+        if (event.type === 'chunk') {
+            assistantText += event.text;
+        } else if (event.type === 'error') {
+            throw new Error(event.message);
+        } else if (event.type === 'done') {
+            break;
+        }
+    }
+    return assistantText.trim() || '[empty response]';
+}
+
 // Webhook endpoint for mothership (install/uninstall/dm/ping)
 if (config.platform?.token) {
     app.use('/api/webhook/mothership', createWebhookRouter(platformBridgeConfig, {
@@ -823,8 +858,14 @@ if (config.platform?.token) {
             console.log(`[SUZIELAW] Uninstalled by org ${ctx.org_id}`);
         },
         onDirectMessage: async (ctx) => {
-            // TODO: run agent-loop with the DM and return response
-            return { response: `Received message from ${ctx.from_agent.name}: "${ctx.message}"` };
+            try {
+                const transcript = (ctx.context as { transcript?: Array<{ from: string; text: string }> } | undefined)?.transcript;
+                const response = await runInterAgentTurn(ctx.from_agent.name, ctx.message, transcript);
+                return { response };
+            } catch (err: any) {
+                console.error(`[SUZIELAW] DM from ${ctx.from_agent.name} failed:`, err.message);
+                return { response: `[Suzie Law could not respond: ${err.message}]` };
+            }
         },
     }));
 }
@@ -1749,7 +1790,7 @@ async function main(): Promise<void> {
         health_endpoint: '/api/health',
         chat_endpoint: '/api/chat',
         webhook_endpoint: '/api/webhook/mothership',
-        capabilities: { tools: ['vector_search', 'courtlistener', 'document_drafting'], features: ['sse_streaming'] },
+        capabilities: { tools: ['vector_search', 'legal_research', 'document_drafting'], features: ['sse_streaming'] },
         version: '0.1.0',
       }
     ).catch(err => console.warn('[SUZIELAW] Platform registration failed:', err.message));

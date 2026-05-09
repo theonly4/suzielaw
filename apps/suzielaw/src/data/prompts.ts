@@ -247,109 +247,29 @@ Run this drafting flow:
       "Proofread the text I paste for spelling, grammar, agreement, and inconsistent capitalization. Return a clean version, then a short bullet list of significant changes (skip trivial typos). If I attach a document instead, convert_to_markdown first.",
   },
   {
-    id: 'courtlistener-case-research',
-    title: 'Research case law on a legal issue (CourtListener)',
-    description: 'Search CourtListener opinions, summarize the leading cases, and cite each holding.',
+    id: 'legal-research-case-law',
+    title: 'Research case law on a legal issue',
+    description: 'Search public case-law databases for the relevant jurisdiction, summarize the leading cases, and cite each holding.',
     practiceAreas: ['litigation', 'general'],
-    prompt: `Research case law on the issue I describe below using CourtListener.
+    prompt: `Research case law on the issue I describe below.
 
-1. Run \`courtlistener_search\` with type "o" (opinions) and a tightly-scoped query. Apply court / date filters when I give them.
-2. Pick the 3–6 most on-point hits. For each, call \`courtlistener_get_cluster\` (and \`courtlistener_get_opinion\` if you need reasoning text) to read the holding.
-3. Return a markdown table — Case | Court | Year | Holding (1–2 sentences) | CourtListener URL — followed by a short synthesis of how the cases line up (majority rule vs. splits).
+1. Pick the right jurisdiction (US, UK, EU, FR, etc.) from context. Run \`legal_search\` with that jurisdiction, type "case_law", and a tightly-scoped query. Apply date_from / date_to when I give them.
+2. Pick the 3–6 most on-point hits. For each, call \`legal_get_document\` to read the decision text.
+3. Return a markdown table — Case | Court | Year | Holding (1–2 sentences) | URL — followed by a short synthesis of how the cases line up (majority rule vs. splits).
 
 Issue:`,
   },
   {
-    id: 'courtlistener-citation-check',
-    title: 'Verify citations in a brief (CourtListener)',
-    description: 'Extract every citation from pasted text and check each against CourtListener.',
-    practiceAreas: ['litigation', 'general'],
-    prompt: `I will paste a passage from a brief or memo. Verify every citation in it.
+    id: 'legal-research-statute',
+    title: 'Read a specific statute / code provision',
+    description: 'Look up the actual text of a statute, regulation, or code article and answer a question about it.',
+    practiceAreas: ['litigation', 'transactional', 'general'],
+    prompt: `I will name a statute, code article, or regulation. Look up the actual text and answer my question.
 
-1. Call \`courtlistener_lookup_citation\` with the full passage as \`text\` so the API extracts citations for you.
-2. For each result, report: the citation as written, normalized form, status (found / not found / unknown reporter), and the matching case name + URL when available.
-3. Flag any citation that did not resolve, and any that resolved to a different case than the surrounding text suggests.`,
-  },
-  {
-    id: 'courtlistener-judge-profile',
-    title: 'Profile a judge (CourtListener)',
-    description: 'Pull positions, recent opinions, and notable rulings for a named judge.',
-    practiceAreas: ['litigation', 'general'],
-    prompt: `Build a one-page profile of the judge I name.
-
-1. Call \`courtlistener_search\` with type "p" to find the judge record. Capture positions and tenure.
-2. Call \`courtlistener_search\` with type "o" and \`judge\` set to their name, ordered by \`dateFiled desc\`, page_size 15.
-3. Pick 3–5 representative opinions and read each cluster via \`courtlistener_get_cluster\`.
-4. Output: judge name, current/past positions, summary of judicial leanings as suggested by the recent opinions, and a citation list with CourtListener URLs.`,
-  },
-  {
-    id: 'courtlistener-recap-docket',
-    title: 'Pull a federal docket from RECAP (CourtListener)',
-    description: 'Find a case in RECAP and summarize the docket and recent entries.',
-    practiceAreas: ['litigation'],
-    prompt: `Find the federal case I describe in RECAP (CourtListener) and summarize the docket.
-
-1. Call \`courtlistener_search\` with type "r" using the case name and any docket number / court I give you.
-2. Pick the most likely match and call \`courtlistener_get_docket\` on its \`docket_id\`.
-3. Output: case caption, court, docket number, judge assigned, nature of suit, key dates, parties, and a chronological list of the 10 most recent docket entries with one-line summaries. Include the CourtListener docket URL.`,
-  },
-  {
-    id: 'courtlistener-opinion-summary',
-    title: 'Summarize an opinion by citation (CourtListener)',
-    description: 'Resolve a citation and produce a structured case brief.',
-    practiceAreas: ['litigation', 'general'],
-    prompt: `I will give you a case citation (e.g., "576 U.S. 644") or a case name. Produce a structured case brief.
-
-1. Use \`courtlistener_lookup_citation\` (or \`courtlistener_search\` if I gave a case name) to resolve to a cluster_id.
-2. Call \`courtlistener_get_cluster\` for case-level metadata, then \`courtlistener_get_opinion\` on the lead opinion for reasoning.
-3. Output: Caption · Court · Year · Citation · Procedural posture · Facts · Issue · Holding · Reasoning · Disposition · Notable concurrences/dissents · CourtListener URL. Cite paragraphs by their position in the opinion text where useful.`,
-  },
-  {
-    id: 'courtlistener-judge-ethics',
-    title: 'Check a judge\'s financial disclosures (CourtListener)',
-    description: 'Pull annual financial disclosures and continuing-income agreements for ethics / recusal screening.',
-    practiceAreas: ['litigation', 'general'],
-    prompt: `Pull the financial disclosure history for the federal judge I name and flag any items relevant for ethics / recusal review.
-
-1. Resolve the judge to a person id with \`courtlistener_search\` (type "p"), confirm via \`courtlistener_get_person\`.
-2. List filings with \`courtlistener_list_financial_disclosures\` (use the person id). Note years, page counts, and whether any are amended.
-3. Pull continuing-income / post-employment agreements with \`courtlistener_list_disclosure_agreements\` for that person.
-4. Output: a table of disclosures (year | report type | amended? | URL), then a table of agreements (year | parties | terms | redacted?), then a short note flagging anything that could trigger recusal (former clients, ongoing payments from a party-in-interest, board seats, etc.).`,
-  },
-  {
-    id: 'courtlistener-recap-filing-read',
-    title: 'Read a specific filing in RECAP (CourtListener)',
-    description: 'Drill from a docket into a specific filing\'s OCR\'d text and summarize.',
-    practiceAreas: ['litigation'],
-    prompt: `Read the specific filing I describe in a federal docket and summarize it.
-
-1. Find the docket via \`courtlistener_search\` type "r" and call \`courtlistener_get_docket\` to confirm.
-2. List the timeline with \`courtlistener_list_docket_entries\`. Identify the filing the user wants (by entry number, date, or description).
-3. Pull its text via \`courtlistener_get_recap_document\` using the recap-document id from the entry.
-4. Output: filing caption | docket entry # | date filed | filer | one-paragraph summary | the 3–5 most important paragraphs quoted | CourtListener URL.`,
-  },
-  {
-    id: 'courtlistener-shepardize',
-    title: 'Map who cites a landmark opinion (CourtListener)',
-    description: 'Use the citation graph to find later opinions that cite a target opinion.',
-    practiceAreas: ['litigation', 'general'],
-    prompt: `Map the descendants of the opinion I will identify (by citation or case name) — i.e. opinions that cite *into* it.
-
-1. Resolve the opinion to an opinion_id (\`courtlistener_lookup_citation\` → cluster → opinion, or \`courtlistener_search\` type "o").
-2. Call \`courtlistener_opinions_cited\` with \`cited_opinion_id\` set to that id, page_size 50.
-3. For the most cited / most recent 5–8 descendants, fetch their cluster via \`courtlistener_get_cluster\` to get caption, court, year.
-4. Output: target opinion (citation, holding in one sentence), then a table of descendants — Case | Court | Year | How it treats the target (followed / distinguished / criticized / overruled) | URL. If you can\'t determine treatment from the snippet, mark "uncertain — read the opinion".`,
-  },
-  {
-    id: 'courtlistener-circuit-split',
-    title: 'Find a circuit split (CourtListener)',
-    description: 'Survey the federal circuits on an issue and surface disagreements.',
-    practiceAreas: ['litigation'],
-    prompt: `Survey the federal circuits on the legal question I describe and flag any split.
-
-1. For each circuit (ca1–ca11, cadc, cafc), run \`courtlistener_search\` with type "o", \`court\` set to that circuit, ordered by \`dateFiled desc\`, page_size 5.
-2. For circuits with on-point hits, call \`courtlistener_get_cluster\` on the strongest case to capture the holding.
-3. Output: a table — Circuit | Leading case | Year | Rule adopted | URL — and a closing paragraph identifying which circuits agree, which disagree, and whether the issue is cert-worthy.`,
+1. Identify the jurisdiction from context (mentions of "Code civil" → FR, "ley/decreto" → AR, "USC" → US, "BOE" → ES, "Normattiva" → IT, etc.).
+2. Run \`legal_search\` with type "legislation" and a query that includes the law name + relevant keyword.
+3. From the top hit, call \`legal_get_document\` for the full text — or \`legal_find_in_document\` with the keyword if it's a long code.
+4. Quote the relevant provision verbatim, give its article/section number and date, and link to the source URL. Then answer my question grounded in the cited text.`,
   },
 
   // ================================================================

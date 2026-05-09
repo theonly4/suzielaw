@@ -93,9 +93,8 @@ async function loadTemplates(dir: string): Promise<LoadedTemplate[]> {
  * markdown body, which the drafting flow can pass to `set_outline` /
  * `write_section` as scaffolding.
  *
- * Templates pair with `courtlistener_find_contract_precedent`: the template
- * supplies the *layout* (parties block, recitals, boilerplate sections); the
- * precedent supplies real-world *language* the model can adapt.
+ * Templates supply the *layout* (parties block, recitals, boilerplate
+ * sections); the model fills in the language.
  */
 export async function buildTemplateTools(opts: BuildOptions): Promise<AnyToolDefinition[]> {
   const templates = await loadTemplates(opts.templatesDir);
@@ -133,7 +132,7 @@ export async function buildTemplateTools(opts: BuildOptions): Promise<AnyToolDef
   const getTool: AnyToolDefinition = {
     name: 'get_template',
     description:
-      'Fetch a legal-document template by id and return its markdown body. Use the body as scaffolding for a drafting flow: derive `set_outline` from the template\'s top-level (##) headings only, then fill each section with `write_section`. Preamble that precedes the first ## (e.g. date, addressee block, salutation, opening paragraph) and ### sub-headings belong inside their parent section as inline markdown — not as separate outline entries. Call set_outline once; don\'t reset it mid-draft. Replace [BRACKETED PLACEHOLDERS] with real values. The template gives you the layout; pair with `courtlistener_find_contract_precedent` for real-world language to adapt (agreements only).',
+      'Fetch a legal-document template by id and return its markdown body. Use the body as scaffolding for a drafting flow: derive `set_outline` from the template\'s top-level (##) headings only, then fill each section with `write_section`. Preamble that precedes the first ## (e.g. date, addressee block, salutation, opening paragraph) and ### sub-headings belong inside their parent section as inline markdown — not as separate outline entries. Call set_outline once; don\'t reset it mid-draft. Replace [BRACKETED PLACEHOLDERS] with real values.',
     parameters: {
       type: 'object',
       properties: {

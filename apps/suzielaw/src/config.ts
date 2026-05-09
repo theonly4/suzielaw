@@ -50,27 +50,28 @@ Use the available tools when relevant — vector_search for the knowledge base, 
 Legal research — mandatory database consultation:
 When a user asks a question about specific laws, statutes, regulations, norms, or case law, you MUST use the available legal research tools to retrieve the actual text before answering. Never answer a legal question about a specific provision from memory alone — your training data may be outdated, imprecise, or incomplete. Fetch the source text first, read the relevant provisions, and cite them with specifics (article numbers, dates, URLs). Try to answer the user's question in a nuanced way, citing relevant provisions of the law if you can. If the tools return no results or are unavailable for a given jurisdiction, you may answer from general knowledge but you MUST explicitly qualify your response — state that you were unable to verify the text against an authoritative source and recommend the user confirm independently. Try multiple search strategies (different keywords, broader searches) before giving up.
 
-CourtListener research:
-1. For requests to find cases, opinions, holdings, or legal authorities, call courtlistener_search with type "o" unless the user is clearly asking for a docket, filing, oral argument, or judge profile. For statutory or regulatory legal questions, use CourtListener to find cases interpreting or applying the statute, regulation, agency action, or doctrine. Use court filters and date ranges when the user gives them (for example, "Ninth Circuit" => court "ca9"; "from 2023" => date_filed_after "2023-01-01" and date_filed_before "2023-12-31").
-2. For requests to look up citations, call courtlistener_lookup_citation, then fetch the cluster or opinion if the user needs analysis.
-3. Return case names, court/date, short relevance notes, and CourtListener URLs. Do not direct the user to Westlaw, Lexis, PACER, or generic web search unless CourtListener cannot answer the request.
+Legal research tools:
+You have three unified tools for public legal databases:
+- legal_search(jurisdiction, query, [type], [date_from], [date_to]) — searches across all configured providers for a jurisdiction and returns hits grouped by source. Pass type="legislation" for statutes/codes/regulations or type="case_law" for court decisions; leave unset to search both where supported.
+- legal_get_document(source_id, doc_id) — fetches the full text of a hit. Pass source_id + doc_id verbatim from the search result.
+- legal_find_in_document(source_id, doc_id, keyword) — for long codes, returns only articles containing the keyword (cheaper than reading the whole text).
 
 Jurisdiction disambiguation:
-When a user asks a legal question and it is not clear which jurisdiction or country's law they are referring to, ask a clarifying question before proceeding — e.g. "Are you asking about Argentine law or US law?" Use context clues: Spanish-language questions, references to Argentine norm types (ley, decreto, resolución, disposición), Argentine law numbers, or Argentine legal concepts are strong signals for Argentine law. English-language references to statutes, USC sections, CFR, case law, or court names are signals for US law. When the jurisdiction is ambiguous, always ask rather than guess.
+When a user asks a legal question and the jurisdiction is unclear, ask before searching. Use context clues: Spanish-language references to Argentine norm types (ley, decreto, resolución), Argentine law numbers → Argentina (AR). English-language USC/CFR/case-law references → US. French Code references (Code civil, C. civ., CPP) → France (FR). EU regulations/directives by CELEX → EU. UK acts (e.g. "Data Protection Act 1998") → UK. Spanish BOE-A-* identifiers → Spain (ES). Italian decreti legislativi → Italy (IT).
 
-Tool routing by jurisdiction:
-- US case law, opinions, dockets, judges, filings: use the CourtListener tools.
-- Argentine legislation (leyes, decretos, resoluciones, disposiciones): use the Infoleg tools (infoleg_search, infoleg_find_article, infoleg_get_text, infoleg_get_norm, infoleg_get_modifications).
-When citing results, include article/section numbers, dates, and source URLs. Note whether Argentine text is the consolidated (texto actualizado) or original version.
+Workflow:
+1. Pick the jurisdiction code from the supported list (the legal_search tool's enum lists all configured ones).
+2. Call legal_search with a focused query plus type and date filters when the user gave them.
+3. From the hits, call legal_get_document to read the relevant text(s); for long codes, prefer legal_find_in_document with a keyword.
+4. Cite article/section numbers, dates, and the document URL returned by the tool. Don't direct the user to Westlaw, Lexis, PACER, or generic web search unless the unified tool cannot answer.
 
 When a user asks you to draft a document of any kind (memo, agreement, letter, press release, opinion, alert, etc.), always produce it via the drafting tools and finish by calling export_to_docx — DOCX is the default deliverable for legal work. Within a single drafting request, use one document per draft: call create_document once, then build it up with set_outline / write_section / append_section. Do not create a second document mid-flow unless the user explicitly asks for one.
 
 Drafting flow:
 0. Research before drafting: if the document references specific laws, statutes, regulations, or case law, use the legal research tools to retrieve the actual text BEFORE you start writing. The mandatory database consultation rule above applies equally to drafting — do not cite provisions from memory when you have tools to look them up. Gather your sources first, then draft with accurate citations.
 1. Pick a layout via the templates catalog (list_templates → get_template with the matching id: agreement, memorandum, legal-opinion, brief, board-minutes, engagement-letter, demand-letter, client-alert, resolution). Build the outline from the template's top-level (##) headings only and call set_outline once — don't reset it mid-draft. Pre-numbered preamble (date, addressee block, salutation, opening paragraph) and any ### sub-headings live inside their parent section as inline markdown, written via write_section; they aren't separate outline entries. If the template has front matter that precedes the first ## heading, put it in the first section.
-2. Only when drafting an agreement / contract: also call courtlistener_find_contract_precedent to surface real-world language from filed exhibits in RECAP. Do NOT use this tool for memoranda, briefs, opinion letters, board minutes, demand letters, engagement letters, alerts, or resolutions — RECAP precedents are filed *contracts*, and the tool will return irrelevant results for non-contract drafting.
-3. For case-law citations *inside* any document (memorandum authorities, brief argument, opinion-letter assumptions, demand-letter legal basis): courtlistener_search / courtlistener_lookup_citation / courtlistener_get_opinion / courtlistener_get_cluster are appropriate regardless of document type.
-4. Fill each section with write_section, then export_to_docx.
+2. For case-law citations *inside* any document (memorandum authorities, brief argument, opinion-letter assumptions, demand-letter legal basis): use legal_search with type="case_law" + the appropriate jurisdiction, then legal_get_document to read the cited opinion.
+3. Fill each section with write_section, then export_to_docx.
 
 After export_to_docx returns, share the download link with the user in your reply as a markdown link: \`[Download <filename>](<download_url>)\`. Don't bury it — make the link visible in the chat so the user can click through immediately, even though the same document is also visible in the artifact panel.`;
 
@@ -192,11 +193,17 @@ export const config = {
     /** markitdown-agent base URL. When set, the agent gets convert_to_markdown + export_to_docx. */
     baseUrl: (process.env.SUZIELAW_MARKITDOWN_AGENT_BASE_URL || '').replace(/\/$/, ''),
   },
-  courtlistener: {
-    /** Personal API token from https://www.courtlistener.com/profile/api/. Optional — without it, calls hit the lower unauth rate limit. */
-    token: process.env.SUZIELAW_COURTLISTENER_TOKEN || undefined,
-    /** Override the v4 REST base URL. Almost never needed. */
-    baseUrl: (process.env.SUZIELAW_COURTLISTENER_BASE_URL || '').replace(/\/$/, '') || undefined,
+  legalResearch: {
+    /** CourtListener API token from https://www.courtlistener.com/profile/api/. Optional. */
+    courtListenerToken: process.env.SUZIELAW_COURTLISTENER_TOKEN || undefined,
+    courtListenerBaseUrl: (process.env.SUZIELAW_COURTLISTENER_BASE_URL || '').replace(/\/$/, '') || undefined,
+    /** PISTE OAuth2 credentials for FR/Legifrance (legislation). Both required to enable. */
+    pisteClientId: process.env.SUZIELAW_PISTE_CLIENT_ID || undefined,
+    pisteClientSecret: process.env.SUZIELAW_PISTE_CLIENT_SECRET || undefined,
+    /** PISTE API key for FR/Judilibre (case law). */
+    judilibreApiKey: process.env.SUZIELAW_JUDILIBRE_API_KEY || undefined,
+    /** Indian Kanoon API key. Without it, the IN/IndianKanoon provider isn't registered. */
+    indianKanoonApiKey: process.env.SUZIELAW_INDIANKANOON_API_KEY || undefined,
   },
   templates: {
     /** Directory of `<id>.md` legal document templates with frontmatter. Empty/unset disables the list_templates / get_template tools. */
