@@ -64,6 +64,7 @@ You'll describe what you want in English; the assistant does the wiring. Pick on
 - **Node 20** (pinned via `.nvmrc` — run `nvm use` after cloning). Switching Node versions after install requires a `better-sqlite3` rebuild — see Troubleshooting.
 - **pnpm 9+**.
 - **Python 3.10+** with `python3 -m venv` — required for the document conversion / DOCX export features.
+- **Docker** with `docker compose` — runs Postgres + Redis for `@teamsuzie/shared-auth`. `pnpm dev:full` boots both via `docker/docker-compose.yml`. (If you'd rather run them yourself, point `SUZIELAW_POSTGRES_URI` and `SUZIELAW_REDIS_URI` at your own instances.)
 
 ### 3. Clone Team Suzie + Suzie Law side by side
 
@@ -94,12 +95,15 @@ pnpm dev:full
 ```
 
 `pnpm dev:full` runs `scripts/dev-up.sh`, which:
+- Starts **Postgres + Redis** via `docker compose` (host ports 5433 + 6380, non-default to avoid collisions). Skipped silently if Docker isn't running — start them yourself if so.
 - Starts **markitdown-agent** (Python conversion service) in the background. Creates the Python venv on first run, installs deps, starts on port 3013. Logs go to `.dev-logs/markitdown-agent.log`.
 - Waits for the agent's `/health` to respond.
-- Starts the **suzielaw** app (Express + Vite) in the foreground.
+- Starts the **suzielaw** app (Express + Vite) in the foreground. On first boot, runs the shared-auth schema sync against Postgres and seeds the demo user.
 - Cleans up both on Ctrl+C.
 
-Open <http://localhost:17502> and sign in with `demo@example.com` / `demo`.
+Open <http://localhost:17502> and sign in with `demo@example.com` / `demo` — that user is seeded into Postgres on first boot. New users register via the auth UI (or POST `/api/auth/register`); shared-auth handles bcrypt hashing, Redis-backed sessions, and CSRF.
+
+For browsing without auth (screenshots, demos), `SUZIELAW_AUTH_BYPASS=true` is set in `.env.example`. **Disable it before deploying anywhere shared** — it treats every request as the demo user.
 
 **Chat-only run (no document tools)**: `pnpm dev` runs just the Node side. Faster start; the drafting / Q&A flows on documents won't work end-to-end without the Python service.
 
@@ -116,8 +120,9 @@ Out of the box, Suzie Law has:
 - **Knowledge Base (optional, RAG).** Drop documents into the Knowledge Base page; they're chunked, embedded via your agent's `/v1/embeddings` endpoint, and stored in `sqlite-vec` on the same SQLite file. The agent calls a `kb_search` tool when relevant. Enable with `SUZIELAW_KB_ENABLED=true`.
 - **Legal research across 19 jurisdictions.** A unified surface — three model-facing tools (`legal_search`, `legal_get_document`, `legal_find_in_document`) — that dispatches across 22 official providers covering most major economies: US (CourtListener case law + eCFR), UK, EU (EUR-Lex + CURIA), FR (Légifrance + Judilibre), DE (gesetze-im-internet + OpenLegalData), ES/BOE, IT/Normattiva, AT/RIS, CH/Fedlex, Council of Europe/HUDOC, BR (Planalto + LexML), IN/Indian Kanoon, AU/Federal Register, NL (Wetten + Rechtspraak), IE, CA, BE/Justel, JP/e-Gov, MX/DOF, AR/InfoLEG. The agent picks the right backend by jurisdiction or `source_id`, returns partial results with per-source errors, and links every cited authority to its official primary-source URL — no fabricated holdings. Most providers work anonymously; auth-gated ones (Légifrance PISTE, Judilibre, Indian Kanoon, CourtListener with token) register only when their env vars are set.
 - **Settings → model picker** with five options: three cloud (Claude Sonnet 4.6, GPT-5.5, Qwen 3.6-Plus) plus two locally-hosted (Qwen 3.6-35B-A3B and Gemma 4-26B-A4B-it via unsloth). Per-model routing — picking a Local model swaps the chat call to its own endpoint. Choice persists in localStorage and applies on the next message.
-- **Local SQLite** for personas, user prompts, and the knowledge base — all in one file via `@teamsuzie/db-sqlite`. No external DB required.
-- **Stub auth** — single demo user, signed-cookie session. Real multi-tenant auth means swapping in `@teamsuzie/shared-auth` (Postgres + Redis); the API contract is intentionally compatible.
+- **Local SQLite** for personas, user prompts, and the knowledge base — all in one file via `@teamsuzie/db-sqlite`. No external DB required for app content.
+- **Multi-tenant auth.** Email/password + Google/Microsoft OAuth, Postgres-backed users + orgs, Redis-backed sessions, CSRF on every mutation — provided by `@teamsuzie/shared-auth`. Sessions, users, and orgs land in Postgres; everything else (personas, KB, matters, chats) stays in SQLite where it always was.
+- **Stripe credit-balance billing (optional).** When `SUZIELAW_STRIPE_SECRET_KEY` is set, `@teamsuzie/billing-stripe` gates `/api/chat` on the org having a positive credit balance — depleted users see an in-app paywall, click through to Stripe Checkout, and come back with credits. Per-chat-turn token usage is debited at a configurable USD-per-1k-token rate. Webhooks are idempotent. Leave the env var unset to run the app without a paywall.
 
 ### Optional features (off by default)
 
@@ -129,6 +134,28 @@ Out of the box, Suzie Law has:
 | Indian Kanoon | `SUZIELAW_INDIANKANOON_API_KEY=...` | Paid API key from indiankanoon.org. Provider stays unregistered without it. |
 | Local models (Qwen / Gemma) | Stand up a vLLM/llama.cpp/unsloth server, set `SUZIELAW_LOCAL_QWEN_BASE_URL` and/or `_GEMMA_BASE_URL` | Default ports 8801 + 8802. The model picker routes to these endpoints when a Local row is selected. |
 | MCP servers | Set `SUZIELAW_MCP_CONFIG=./mcp.json` | Standard Claude-Desktop-shape config. Loaded tools surface as `<server>__<tool>` in the agent. |
+| Stripe billing | `SUZIELAW_STRIPE_SECRET_KEY=sk_test_…` + `SUZIELAW_STRIPE_WEBHOOK_SECRET=whsec_…` | Turns on the credit-balance paywall on `/api/chat`. See [Enabling billing locally](#enabling-billing-locally). Tune `SUZIELAW_BILLING_USD_PER_1K_TOKENS` to match your model cost. |
+
+### Enabling billing locally
+
+The billing tables (`org_billing`, `billing_transaction`) are always created — the paywall is what's gated on `SUZIELAW_STRIPE_SECRET_KEY`. To exercise the full flow end-to-end:
+
+1. Get a Stripe test secret key from <https://dashboard.stripe.com/test/apikeys> and put it in `.env`:
+   ```bash
+   SUZIELAW_STRIPE_SECRET_KEY=sk_test_...
+   ```
+2. Install the [Stripe CLI](https://stripe.com/docs/stripe-cli) and forward webhooks to the local server:
+   ```bash
+   stripe listen --forward-to http://localhost:17501/api/billing/webhook
+   ```
+   The CLI prints a signing secret — paste it into `.env` as `SUZIELAW_STRIPE_WEBHOOK_SECRET=whsec_...` and restart suzielaw.
+3. Turn off the dev bypass so the paywall actually fires:
+   ```bash
+   SUZIELAW_AUTH_BYPASS=false
+   ```
+4. Open the app, log in, try to send a chat — the paywall dialog opens. Click **Add credits** → redirected to Stripe Checkout → pay with test card `4242 4242 4242 4242` (any future expiry, any CVC) → bounce back to the app. The sidebar pill shows the new balance and `/api/chat` is unblocked. Per-turn deductions hit `org_billing.credit_balance`; the full ledger is at `/billing`.
+
+The billing surface (`@teamsuzie/billing-stripe`) ships its own README documenting the package boundary, the `OrgBilling` / `BillingTransaction` models, the `createBillingRouter` / `createRequireCreditedOrg` factories, and the deliberate omissions vs. the private upstream (no BYOK mode, no DB-backed pricing config, no LLM-proxy balance sync).
 
 ---
 
@@ -147,14 +174,17 @@ Out of the box, Suzie Law has:
     packages/skills/                      # Skill markdown registry (workflow + API skills)
     packages/db-sqlite/                   # SQLite plumbing
     packages/approvals/                   # human-in-the-loop approval queue
+    packages/shared-auth/                 # Multi-tenant auth: users/orgs/sessions, Postgres + Redis, CSRF
+    packages/billing-stripe/              # Stripe credit-balance billing (org_billing, paywall middleware, webhooks)
   suzielaw/                               # this repo
+    docker/docker-compose.yml             # Postgres + Redis for shared-auth (host ports 5433 + 6380)
     apps/suzielaw/                        # Express + Vite app
       client/src/                         # React UI (consumes @teamsuzie/ui)
       client/src/data/                    # legal practice areas, models list, seed prompts
-      client/src/pages/                   # Assistant, Library, Personas, KnowledgeBase, History, Settings
+      client/src/pages/                   # Assistant, Library, Personas, KnowledgeBase, History, Settings, Billing
       personas/                           # Builtin <id>/PERSONA.md files (litigation, m-and-a, …)
       skills/                             # Workflow skill markdown (e.g. document-summarization)
-      src/                                # Express backend, auth + chat + KB + persona endpoints
+      src/                                # Express backend, auth + chat + KB + persona + billing endpoints
 ```
 
 Legal-domain content lives in this repo. The chat shell, UI primitives, agent loop, doc tools, persona/KB runtimes, and conversion service — all upstream. **App-specific stays here; reusable goes upstream.** See `AGENTS.md` for the rule.

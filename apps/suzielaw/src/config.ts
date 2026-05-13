@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { buildLocalAgentRegistry, LOCAL_MODELS } from '@teamsuzie/agent-loop';
 import { buildOAuthProvidersFromEnv, parseTokenLimit } from '@teamsuzie/hosted-demo';
+import type { SharedAuthConfig } from '@teamsuzie/shared-auth';
 
 const SKILL_VAR_PREFIX = 'SUZIELAW_SKILL_VAR_';
 const DEFAULT_QWEN_MODEL = 'qwen3.6-plus';
@@ -170,17 +171,18 @@ export const config = {
     fallbackTokensPerCall: parseTokenLimit(process.env.SUZIELAW_TOKEN_FALLBACK_PER_CALL, 0),
   },
   /**
-   * Demo credentials. The stub auth backend accepts these and only these. Real
-   * multi-user / multi-tenant auth means swapping in `@teamsuzie/shared-auth`
-   * (Postgres + Redis); this is only here so the login UI is functional out of
-   * the box.
+   * Seed credentials for the dev demo user. In development, a user with this
+   * email/password is upserted in Postgres on boot so the login UI works out
+   * of the box. In production this seeding is skipped — register real users
+   * via POST /api/auth/register.
    */
   demo: {
     email: process.env.SUZIELAW_DEMO_EMAIL || 'demo@example.com',
-    password: process.env.SUZIELAW_DEMO_PASSWORD || 'demo',
+    password: process.env.SUZIELAW_DEMO_PASSWORD || 'demo12345',
     name: process.env.SUZIELAW_DEMO_NAME || 'Demo Lawyer',
     role: process.env.SUZIELAW_DEMO_ROLE || 'attorney',
   },
+  nodeEnv: process.env.NODE_ENV || 'development',
   db: {
     /** SQLite db path, relative to the cwd the server starts from. */
     path: process.env.SUZIELAW_DB_PATH || './data/suzielaw.db',
@@ -219,4 +221,62 @@ export const config = {
     token: process.env.SUZIELAW_PLATFORM_TOKEN || undefined,
     registrationToken: process.env.SUZIELAW_PLATFORM_REG_TOKEN || undefined,
   },
+  /**
+   * Stripe billing (@teamsuzie/billing-stripe). Disabled when STRIPE_SECRET_KEY
+   * is unset — the billing routes still mount but every Stripe call throws,
+   * and `requireCreditedOrg` returns 402 immediately. In dev set the SK_TEST_*
+   * key + run `stripe listen --forward-to localhost:17501/api/billing/webhook`
+   * to capture webhooks locally.
+   */
+  billing: {
+    enabled: !!process.env.SUZIELAW_STRIPE_SECRET_KEY,
+    stripeSecretKey: process.env.SUZIELAW_STRIPE_SECRET_KEY || '',
+    stripeWebhookSecret: process.env.SUZIELAW_STRIPE_WEBHOOK_SECRET || '',
+    initialCreditsUsd: parseFloat(process.env.SUZIELAW_BILLING_INITIAL_CREDITS || '20'),
+    topUpAmountUsd: parseFloat(process.env.SUZIELAW_BILLING_TOPUP_AMOUNT || '20'),
+    lowBalanceThresholdUsd: parseFloat(process.env.SUZIELAW_BILLING_LOW_BALANCE_THRESHOLD || '5'),
+    /**
+     * Dollar rate per 1k tokens used for metering. Total chat-turn deduction
+     * = (tokens_used / 1000) * rate. Default $0.01/1k tokens — adjust to
+     * match your model pricing. Set to 0 to disable per-turn deductions
+     * (the org will still need a positive balance to start a turn).
+     */
+    usdPer1kTokens: parseFloat(process.env.SUZIELAW_BILLING_USD_PER_1K_TOKENS || '0.01'),
+  },
+};
+
+/**
+ * Config consumed by `@teamsuzie/shared-auth` (Sequelize + Redis-backed sessions
+ * + CSRF). The defaults point at the Postgres + Redis containers in
+ * `docker/docker-compose.yml`. Override in production with real URIs and a
+ * long random SUZIELAW_SESSION_SECRET.
+ */
+export const sharedAuthConfig: SharedAuthConfig = {
+  node_env: config.nodeEnv,
+  redis: {
+    uri: process.env.SUZIELAW_REDIS_URI || 'redis://localhost:6380/0',
+    key_prefix: process.env.SUZIELAW_REDIS_KEY_PREFIX || 'suzielaw',
+  },
+  postgres: {
+    uri:
+      process.env.SUZIELAW_POSTGRES_URI ||
+      'postgres://suzielaw:suzielaw@localhost:5433/suzielaw',
+    logging: !!process.env.SUZIELAW_POSTGRES_ENABLE_LOGGING,
+  },
+  cookie: {
+    name: config.session.cookieName,
+    secret: config.session.cookieSecret,
+    domain: process.env.SUZIELAW_COOKIE_DOMAIN || undefined,
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  },
+  csrf: {
+    // The browser-side CSRF lane is handled by @teamsuzie/hosted-demo's
+    // createCsrfMiddleware (cookie name 'suzielaw.csrf'). shared-auth's own
+    // CsrfMiddleware isn't mounted in suzielaw — this field is required by
+    // the SharedAuthConfig type but unused at runtime in this app.
+    cookie_name: 'suzielaw.csrf',
+  },
+  default_user_id:
+    process.env.SUZIELAW_DEFAULT_USER_ID ||
+    '00000000-0000-0000-0000-000000000000',
 };

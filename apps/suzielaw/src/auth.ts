@@ -1,6 +1,7 @@
 import { Router, type Request, type RequestHandler, type Response, type NextFunction } from 'express';
-import cookieSession from 'cookie-session';
-import { config } from './config.js';
+import type { SessionService } from '@teamsuzie/shared-auth';
+import { createAuthRouter as createSharedAuthRouter } from '@teamsuzie/shared-auth';
+import { config, sharedAuthConfig } from './config.js';
 import type { TokenBudgetStore } from '@teamsuzie/hosted-demo';
 
 export interface SessionUser {
@@ -10,20 +11,28 @@ export interface SessionUser {
 }
 
 /**
- * Stub auth — single demo user from env. Real multi-user / multi-tenant auth
- * means swapping this for `@teamsuzie/shared-auth` (Postgres-backed users,
- * Redis-backed sessions, CSRF). The route shape (POST /api/auth/login,
- * POST /api/auth/logout, GET /api/session) is intentionally compatible with
- * the upstream pattern so the swap is mostly server-side.
+ * Shape of the session object once shared-auth's AuthController.login has run.
+ * (See open_teamsuzie/packages/shared-auth/src/controllers/auth.ts → `login`.)
+ * The hosted-demo OAuth router writes a different shape (`session.user`) — both
+ * are handled by `getSessionUser` below.
  */
-export function createSessionMiddleware(): RequestHandler {
-  return cookieSession({
-    name: config.session.cookieName,
-    keys: [config.session.cookieSecret],
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-    sameSite: 'lax',
-    httpOnly: true,
-  });
+interface SharedAuthSessionShape {
+  userId?: string;
+  userEmail?: string;
+  userName?: string;
+  userRole?: string;
+  user?: SessionUser;
+}
+
+/**
+ * Session middleware comes from shared-auth's SessionService (Redis-backed
+ * express-session). We accept it as an argument rather than constructing it
+ * here so `src/index.ts` can call `sessionService.init(app)` directly when it
+ * wants the standard wiring, or grab the raw middleware via this helper for
+ * tests / non-standard mounts.
+ */
+export function createSessionMiddleware(sessionService: SessionService): RequestHandler {
+  return sessionService.getMiddleware();
 }
 
 /**
@@ -41,53 +50,78 @@ function bypassUser(): SessionUser | null {
   };
 }
 
+function readSessionUser(req: Request): SessionUser | null {
+  const session = req.session as SharedAuthSessionShape | undefined;
+  if (!session) return bypassUser();
+  // OAuth path (hosted-demo router): session.user is set directly.
+  if (session.user?.email) return session.user;
+  // Email/password path (shared-auth AuthController.login): individual fields.
+  if (session.userId && session.userEmail) {
+    return {
+      email: session.userEmail,
+      name: session.userName ?? session.userEmail,
+      role: session.userRole ?? 'user',
+    };
+  }
+  return bypassUser();
+}
+
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  // cookie-session attaches req.session
-  const user = (req.session as { user?: SessionUser } | null)?.user ?? bypassUser();
-  if (!user) {
+  if (!readSessionUser(req)) {
     res.status(401).json({ error: 'unauthorized' });
     return;
   }
   next();
 }
 
+/**
+ * The 50+ call sites in `src/index.ts` (and submodules) treat this as a sync
+ * accessor. Keep it sync — shared-auth's login writes the user identity
+ * directly into `req.session`, so no DB lookup is needed.
+ *
+ * Side effect: lazily registers the user with the token-budget store on first
+ * sighting, so the existing `TokenBudgetStore.upsertAccount` glue (previously
+ * called inside the stub's POST /auth/login handler) still fires regardless
+ * of whether the user signed in via password, OAuth, or the dev bypass.
+ */
 export function getSessionUser(req: Request): SessionUser | null {
-  return (req.session as { user?: SessionUser } | null)?.user ?? bypassUser();
-}
-
-export function createAuthRouter(opts?: { budget?: TokenBudgetStore }): Router {
-  const router: Router = Router();
-
-  router.post('/auth/login', (req, res) => {
-    const email = String(req.body?.email || '').trim().toLowerCase();
-    const password = String(req.body?.password || '');
-
-    if (email !== config.demo.email.toLowerCase() || password !== config.demo.password) {
-      res.status(401).json({ message: 'Invalid email or password' });
-      return;
-    }
-
-    const user: SessionUser = {
-      email: config.demo.email,
-      name: config.demo.name,
-      role: config.demo.role,
-    };
-    opts?.budget?.upsertAccount({
+  const user = readSessionUser(req);
+  if (user && tokenBudget && !tokenBudget.getSummary(user.email)) {
+    tokenBudget.upsertAccount({
       email: user.email,
       name: user.name,
       role: user.role,
+      // TokenBudgetStore's enum only knows about hosted-demo provider ids.
+      // Mark shared-auth-issued sessions as 'demo' for accounting — they're
+      // distinguished from real OAuth accounts by absence of an OAuth row.
       authProvider: 'demo',
       authSubject: user.email,
     });
-    (req.session as { user?: SessionUser }).user = user;
-    res.json({ ok: true, user });
-  });
+  }
+  return user;
+}
 
-  router.post('/auth/logout', (req, res) => {
-    req.session = null;
-    res.json({ ok: true });
-  });
+// Module-level handle to the budget store so getSessionUser can hit it
+// without every call site threading it through. Wired by createAuthRouter.
+let tokenBudget: TokenBudgetStore | undefined;
 
+/**
+ * Mounts shared-auth's auth routes (POST /auth/login, /auth/logout,
+ * /auth/register, GET /auth/me, /auth/introspect, …) plus the suzielaw-specific
+ * GET /session route that the React client reads. Mount under `/api`:
+ *
+ *   app.use('/api', createAuthRouter({ budget: tokenBudget }));
+ */
+export function createAuthRouter(opts?: { budget?: TokenBudgetStore }): Router {
+  if (opts?.budget) tokenBudget = opts.budget;
+  const router: Router = Router();
+
+  // Mount the shared-auth controller under /auth so the URLs the client
+  // already uses (/api/auth/login, /api/auth/logout) keep working.
+  router.use('/auth', createSharedAuthRouter(sharedAuthConfig));
+
+  // Client-facing session endpoint. Returns the same shape the stub used
+  // ({ user, tokenBudget }) so the existing useSession() hook is unchanged.
   router.get('/session', (req, res) => {
     const user = getSessionUser(req);
     res.json({

@@ -30,6 +30,25 @@ fi
 LOG_DIR="$ROOT_DIR/.dev-logs"
 mkdir -p "$LOG_DIR"
 
+# --- Postgres + Redis (Docker) ---
+# shared-auth needs Postgres (users/orgs) and Redis (sessions). Boot them via
+# docker-compose if Docker is around; skip silently otherwise so a user with
+# their own Postgres/Redis running on the configured URIs isn't blocked.
+COMPOSE_FILE="$ROOT_DIR/docker/docker-compose.yml"
+if [ -f "$COMPOSE_FILE" ] && command -v docker >/dev/null 2>&1; then
+  if docker compose version >/dev/null 2>&1; then
+    log "starting Postgres + Redis (docker compose, logs: $LOG_DIR/docker.log)"
+    docker compose -f "$COMPOSE_FILE" up -d >"$LOG_DIR/docker.log" 2>&1 || {
+      warn "docker compose up failed — continuing. Tail of log:"
+      tail -20 "$LOG_DIR/docker.log" >&2 || true
+    }
+  else
+    warn "docker is present but 'docker compose' subcommand not available — skipping infra boot"
+  fi
+else
+  warn "docker not found — skipping Postgres/Redis boot. Make sure they're already running on the ports in .env (defaults: 5433, 6380)."
+fi
+
 CHILD_PIDS=()
 cleanup() {
   if [ "${#CHILD_PIDS[@]}" -gt 0 ]; then

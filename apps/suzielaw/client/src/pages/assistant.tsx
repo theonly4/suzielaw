@@ -22,6 +22,7 @@ import { parseResponse, SENTINEL_OPEN, type Citation } from '@teamsuzie/citation
 import type { ChatMessage as PersistedChatMessage } from '@teamsuzie/chats';
 import { useDocSidePanel } from '../components/document-side-panel.js';
 import { useAssistantChats } from '../hooks/use-assistant-chats.js';
+import { PaywallDialog } from '../components/paywall-dialog.js';
 import {
   TrackedChangesPanel,
   type ProposeEditsResult,
@@ -338,6 +339,15 @@ export function AssistantPage({
     null,
   );
   const [workflowPickerOpen, setWorkflowPickerOpen] = useState(false);
+  // Paywall state — opened when /api/chat returns 402 with the
+  // payment_required envelope from @teamsuzie/billing-stripe's
+  // requireCreditedOrg middleware. The reason drives the modal copy
+  // (setup vs. top-up) so a first-time user and a depleted user see
+  // distinct messaging.
+  const [paywall, setPaywall] = useState<{
+    open: boolean;
+    reason: 'no_billing' | 'insufficient_credits' | 'no_org' | 'generic';
+  }>({ open: false, reason: 'generic' });
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<ArtifactSnapshot | null>(null);
@@ -618,6 +628,18 @@ export function AssistantPage({
         }),
         signal: ac.signal,
       });
+
+      // Paywall: requireCreditedOrg returns 402 with a JSON envelope when
+      // the caller's org has no billing or zero credits. Convert that into
+      // a modal instead of letting the SSE parser try to parse JSON.
+      if (response.status === 402) {
+        const body = (await response.json().catch(() => ({}))) as {
+          reason?: 'no_billing' | 'insufficient_credits' | 'no_org';
+        };
+        setPaywall({ open: true, reason: body.reason ?? 'generic' });
+        setStatus('idle');
+        return;
+      }
 
       if (!response.body) {
         throw new Error('No response body from starter chat backend');
@@ -1062,6 +1084,11 @@ export function AssistantPage({
           // doesn't fight the textarea focus.
           window.setTimeout(() => textareaRef.current?.focus(), 0);
         }}
+      />
+      <PaywallDialog
+        open={paywall.open}
+        onOpenChange={(open) => setPaywall((p) => ({ ...p, open }))}
+        reason={paywall.reason}
       />
     </div>
   );

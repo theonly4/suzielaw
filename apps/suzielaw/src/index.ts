@@ -1,8 +1,29 @@
+import 'reflect-metadata';
 import 'dotenv/config';
 import cors from 'cors';
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  SequelizeService,
+  SessionService,
+  UserService,
+  User,
+  Organization,
+  OrganizationMember,
+  OrgDomain,
+  Agent,
+  AgentProfile,
+} from '@teamsuzie/shared-auth';
+import {
+  BillingService,
+  OrgBilling,
+  BillingTransaction,
+  createBillingRouter,
+  createBillingWebhookRouter,
+  createRequireCreditedOrg,
+} from '@teamsuzie/billing-stripe';
+import type { ModelCtor } from 'sequelize-typescript';
 import { ApprovalQueue, InMemoryApprovalStore } from '@teamsuzie/approvals';
 import {
   connectMcpServers,
@@ -17,8 +38,8 @@ import {
   type SkillLoadResult,
   type ToolContext,
 } from '@teamsuzie/agent-loop';
-import { config } from './config.js';
-import { createAuthRouter, createSessionMiddleware, getSessionUser, requireAuth } from './auth.js';
+import { config, sharedAuthConfig } from './config.js';
+import { createAuthRouter, getSessionUser, requireAuth } from './auth.js';
 import {
     createPlatformRequestMiddleware,
     createWebhookRouter,
@@ -262,10 +283,48 @@ function rebuildToolCtx(): void {
   };
 }
 
+// Shared-auth (Sequelize/Postgres + Redis sessions). Models are registered up
+// front so `sequelize.sync()` in main() creates the schema in one pass. The
+// session middleware is mounted synchronously here because the rest of the
+// app's `app.use` calls run at module load — we initialize the Redis-backed
+// store eagerly. Postgres `authenticate()` + `sync()` still happen in main()
+// before the listener starts.
+type ModelWithAssociate = ModelCtor & { associate?: (models: unknown) => void };
+const sequelizeService = new SequelizeService(
+  sharedAuthConfig,
+  [
+    User, Organization, OrganizationMember, OrgDomain, Agent, AgentProfile,
+    // Billing tables — co-registered so sync() creates them in one pass.
+    OrgBilling, BillingTransaction,
+  ] as ModelWithAssociate[],
+);
+const sessionService = new SessionService(sharedAuthConfig);
+
+// Stripe billing. When SUZIELAW_STRIPE_SECRET_KEY is unset (free / OSS demo
+// mode), the service object still exists but every Stripe call throws and
+// requireCreditedOrg returns 402 for everyone. The DB tables are created
+// either way so flipping the env var later doesn't need a migration.
+const billingService = new BillingService({
+  redisUrl: sharedAuthConfig.redis.uri,
+  sequelize: sequelizeService.getSequelize(),
+  stripeSecretKey: config.billing.stripeSecretKey,
+  stripeWebhookSecret: config.billing.stripeWebhookSecret,
+  initialCreditsUsd: config.billing.initialCreditsUsd,
+  topUpAmountUsd: config.billing.topUpAmountUsd,
+  lowBalanceThresholdUsd: config.billing.lowBalanceThresholdUsd,
+});
+
 const app = express();
 app.use(cors({ origin: config.allowedOrigin, credentials: true }));
+// Stripe webhook MUST be mounted before express.json() — signature
+// verification needs the raw body. The webhook router uses express.raw()
+// internally. Skipped entirely when billing is disabled (no STRIPE_SECRET_KEY)
+// since constructWebhookEvent would just throw on every event.
+if (config.billing.enabled) {
+  app.use('/api/billing/webhook', createBillingWebhookRouter({ service: billingService }));
+}
 app.use(express.json({ limit: '2mb' }));
-app.use(createSessionMiddleware());
+sessionService.init(app);
 app.use(createCsrfMiddleware({
     cookieName: 'suzielaw.csrf',
     // Mothership webhooks authenticate via X-Platform-Token (handled by
@@ -282,6 +341,22 @@ app.use(
     defaultRole: 'attorney',
   }),
 );
+// Billing routes (/setup, /status, /topup, /auto-recharge, /transactions).
+// Always mounted — even when STRIPE_SECRET_KEY is unset the /status endpoint
+// is useful for the client to detect that billing is disabled (returns
+// { billing: null }).
+app.use('/api/billing', createBillingRouter({
+  service: billingService,
+  requireAuth,
+}));
+
+// Paywall middleware applied to cost-incurring routes below. When billing is
+// disabled (no Stripe key) we skip the check entirely so OSS users can run
+// suzielaw without a Stripe account — flip SUZIELAW_STRIPE_SECRET_KEY on to
+// enforce pay-to-use.
+const requireCreditedOrg: express.RequestHandler = config.billing.enabled
+  ? createRequireCreditedOrg({ service: billingService })
+  : (_req, _res, next) => next();
 // /api/user-prompts is gone — replaced by /api/workflows. Existing
 // rows are migrated into the workflows table at boot via
 // `seedAndMigrateWorkflows`; the legacy `user_prompts` table stays
@@ -853,7 +928,7 @@ if (config.platform?.token) {
 // Platform-proxied requests bypass session auth via virtual session
 const validatePlatformRequest = createPlatformRequestMiddleware(platformBridgeConfig);
 
-app.post('/api/chat', validatePlatformRequest, requireAuth, async (req, res) => {
+app.post('/api/chat', validatePlatformRequest, requireAuth, requireCreditedOrg, async (req, res) => {
   const message = String(req.body?.message || '').trim();
   const history = Array.isArray(req.body?.history) ? (req.body.history as ChatMessage[]) : [];
   const sessionId = String(req.body?.sessionId || '').trim();
@@ -953,6 +1028,12 @@ app.post('/api/chat', validatePlatformRequest, requireAuth, async (req, res) => 
       return;
     }
   }
+  // Billing snapshot: capture token count before the turn so we can compute
+  // the delta and bill the org's credit balance once the stream completes.
+  // requireCreditedOrg stashed the resolved org id on the request; bail out
+  // gracefully when billing is disabled (no org id stashed).
+  const billingOrgId = (req as express.Request & { _billingOrgId?: string })._billingOrgId;
+  const tokensUsedBefore = ownerEmail ? (tokenBudget.getSummary(ownerEmail)?.tokensUsed ?? 0) : 0;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -1262,6 +1343,25 @@ app.post('/api/chat', validatePlatformRequest, requireAuth, async (req, res) => 
           'Failed to persist chat messages:',
           err instanceof Error ? err.message : err,
         );
+      }
+    }
+    // Bill the org for tokens consumed this turn. The TokenBudgetStore is
+    // cumulative per-account, so the delta = (after - before) is what this
+    // turn cost. Fire-and-forget — a billing error must not block the
+    // already-streamed assistant response from finalizing.
+    if (config.billing.enabled && billingOrgId && ownerEmail) {
+      const tokensUsedAfter = tokenBudget.getSummary(ownerEmail)?.tokensUsed ?? 0;
+      const tokensDelta = Math.max(0, tokensUsedAfter - tokensUsedBefore);
+      const usdAmount = (tokensDelta / 1000) * config.billing.usdPer1kTokens;
+      if (usdAmount > 0) {
+        billingService
+          .deductCredits(billingOrgId, usdAmount)
+          .catch((err) =>
+            console.error(
+              `[billing] deductCredits failed (org=${billingOrgId}, $${usdAmount.toFixed(4)}):`,
+              err instanceof Error ? err.message : err,
+            ),
+          );
       }
     }
     res.end();
@@ -1751,7 +1851,43 @@ app.use((req, res, next) => {
   });
 });
 
+async function bootstrapAuthDb(): Promise<void> {
+  try {
+    await sequelizeService.getSequelize().authenticate();
+    await sequelizeService.getSequelize().sync();
+    console.log('[DB] shared-auth schema synced (Postgres)');
+  } catch (err) {
+    console.error(
+      '[DB] Cannot connect to Postgres for shared-auth. Make sure docker/docker-compose.yml is up or SUZIELAW_POSTGRES_URI points at a running database.',
+    );
+    throw err;
+  }
+
+  if (config.nodeEnv === 'development') {
+    try {
+      const userService = new UserService(sharedAuthConfig);
+      const existing = await User.findOne({ where: { email: config.demo.email } });
+      if (!existing) {
+        await userService.create(
+          config.demo.email,
+          config.demo.password,
+          config.demo.name,
+          'user',
+        );
+        console.log(
+          `[seed] created demo user ${config.demo.email} / ${config.demo.password}`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[seed] demo user upsert skipped: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+}
+
 async function main(): Promise<void> {
+  await bootstrapAuthDb();
   await bootstrapSkills();
   rebuildToolCtx();
   await bootstrapMcp();

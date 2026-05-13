@@ -1,0 +1,44 @@
+name: suzielaw
+
+# Auth/billing infra for suzielaw. Postgres holds users/orgs (@teamsuzie/shared-auth)
+# and (later, separate PR) billing rows; Redis holds sessions + cached balances.
+#
+# Boot with:    docker compose -f docker/docker-compose.yml up -d
+# Shut down:    docker compose -f docker/docker-compose.yml down
+# Wipe volumes: docker compose -f docker/docker-compose.yml down -v
+#
+# The dev-up.sh script will start these automatically if Docker is available
+# and they aren't already up.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: suzielaw
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-suzielaw}
+      POSTGRES_DB: suzielaw
+    ports:
+      - "${SUZIELAW_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - suzielaw-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suzielaw"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${SUZIELAW_REDIS_PORT:-6380}:6379"
+    volumes:
+      - suzielaw-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  suzielaw-postgres-data:
+  suzielaw-redis-data:

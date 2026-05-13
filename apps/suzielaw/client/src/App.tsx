@@ -20,12 +20,15 @@ import {
 } from '@teamsuzie/ui';
 import { Protected } from './components/protected.js';
 import { useAssistantChats } from './hooks/use-assistant-chats.js';
+import { useBilling } from './hooks/use-billing.js';
 import { useSession } from './hooks/use-session.js';
 import { AssistantPage } from './pages/assistant.js';
 import { HistoryPage } from './pages/history.js';
 import { KnowledgeBasePage } from './pages/knowledge-base.js';
 import { LibraryPage } from './pages/library.js';
 import { LoginPage } from './pages/login.js';
+import { BillingPage } from './pages/billing.js';
+import { BillingReturnPage } from './pages/billing-return.js';
 import { MattersPage } from './pages/matters.js';
 import { MatterDetailPage } from './pages/matter-detail.js';
 import { ReviewDetailPage } from './pages/review-detail.js';
@@ -169,6 +172,7 @@ export default function App() {
   const [healthLoaded, setHealthLoaded] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const session = useSession();
+  const billing = useBilling();
   const navigate = useNavigate();
   const { personas, loading: personasLoading } = usePersonas();
   const personaList = Array.isArray(personas) ? personas : [];
@@ -246,6 +250,11 @@ export default function App() {
           <LoginPage />
         }
       />
+      {/* Stripe Checkout returns here. Outside <Protected> because Stripe's
+          redirect is the only thing on the page — the session cookie is
+          still present from before the user left, so the inner /api/billing
+          calls still authenticate. */}
+      <Route path="/billing/return" element={<BillingReturnPage />} />
       <Route
         path="/*"
         element={
@@ -316,6 +325,25 @@ export default function App() {
                   >
                     <NavLink to="/settings">Settings</NavLink>
                   </SidebarNavItem>
+
+                  {/* Billing pill — hidden when the server hasn't returned a
+                      billing record yet (loading) or when billing is disabled
+                      entirely (no Stripe key, no OrgBilling row). Shows the
+                      credit balance and links to the full billing page. */}
+                  {billing.billing && (
+                    <Link
+                      to="/billing"
+                      className={cn(
+                        'mt-2 flex items-center justify-between border border-background/20 px-3 py-1.5 text-[10px] uppercase tracking-[0.12em] transition-colors hover:border-saffron-400 hover:bg-background/5',
+                        billing.billing.credit_balance < 1 && 'border-destructive/70 text-destructive',
+                      )}
+                    >
+                      <span className="font-mono text-background/60">Credits</span>
+                      <span className="font-mono font-semibold text-background">
+                        ${billing.billing.credit_balance.toFixed(2)}
+                      </span>
+                    </Link>
+                  )}
 
                   <div className="mt-4 flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
@@ -407,6 +435,7 @@ export default function App() {
                       />
                     }
                   />
+                  <Route path="/billing" element={<BillingPage />} />
                 </Routes>
               </AppShellMain>
               <SidePanelSurface />
