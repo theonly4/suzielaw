@@ -95,7 +95,7 @@ import { parseResponse } from '@teamsuzie/citations';
 import type { FileRecord } from './files.js';
 import { MatterRag } from './matter-rag.js';
 import { buildKbStore, createKbRouter } from './kb.js';
-import { draftColumnPrompt } from './column-draft.js';
+import { draftColumnPrompt } from '@teamsuzie/markdown-document';
 import { buildReviewWorkbook } from './reviews-export.js';
 import { runDocumentDiff } from './diff-engine.js';
 import { composeRedlineDocx, redlineDownloadFilename } from './redline-export.js';
