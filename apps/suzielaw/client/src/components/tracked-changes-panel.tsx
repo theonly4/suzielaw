@@ -3,6 +3,7 @@ import {
   Button,
   Check,
   ExternalLink,
+  RedlineSpan,
   Undo2,
   X,
   cn,
@@ -397,29 +398,9 @@ function TrackedChangeCard({
         </div>
       )}
       <div className="leading-relaxed">
-        {previewOps.map((op, index) => {
-          if (op.kind === 'equal') {
-            return <span key={index}>{op.text}</span>;
-          }
-          if (op.kind === 'delete') {
-            return (
-              <span
-                key={index}
-                className="rounded-sm bg-destructive/15 px-0.5 text-destructive line-through decoration-destructive/60"
-              >
-                {op.text}
-              </span>
-            );
-          }
-          return (
-            <span
-              key={index}
-              className="rounded-sm bg-emerald-500/15 px-0.5 text-emerald-700 dark:text-emerald-300"
-            >
-              {op.text}
-            </span>
-          );
-        })}
+        {previewOps.map((op, index) => (
+          <RedlineSpan key={index} kind={op.kind} text={op.text} />
+        ))}
       </div>
       <div className="mt-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">

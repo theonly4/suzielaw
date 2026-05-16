@@ -1,5 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Download, LoadingState, cn } from '@teamsuzie/ui';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Download,
+  LoadingState,
+  RedlineRuns,
+  type RedlineParagraph as UpstreamRedlineParagraph,
+} from '@teamsuzie/ui';
 import type {
   FocusCardEventDetail,
   FocusRevisionEventDetail,
@@ -19,27 +24,40 @@ import type {
  *
  * On `redline:refresh` (fired after an accept/reject mutates the file)
  * the panel re-fetches its paragraphs.
+ *
+ * The server `/redline-view` endpoint speaks the legacy suzielaw wire
+ * vocabulary (`kind: 'ins' | 'del' | 'equal'`); upstream renderers use
+ * `'insert' | 'delete' | 'equal'`. We normalize at the boundary in
+ * `toUpstreamKind` before handing paragraphs to `<RedlineRuns>`.
  */
 
-interface RedlineRun {
+// Wire shape from the server's `/redline-view` endpoint. Keep `ins`/`del`
+// here — the server convention is intentionally legacy.
+interface WireRedlineRun {
   kind: 'equal' | 'ins' | 'del';
   text: string;
   revisionId?: number;
 }
 
-interface RedlineParagraph {
+interface WireRedlineParagraph {
   index: number;
-  runs: RedlineRun[];
+  runs: WireRedlineRun[];
 }
 
 interface ApiResponse {
-  paragraphs: RedlineParagraph[];
+  paragraphs: WireRedlineParagraph[];
 }
 
 interface RedlineRefreshDetail {
   sessionId: string;
   fileId: string;
-  paragraphs?: RedlineParagraph[];
+  paragraphs?: WireRedlineParagraph[];
+}
+
+function toUpstreamKind(
+  kind: WireRedlineRun['kind'],
+): 'equal' | 'insert' | 'delete' {
+  return kind === 'ins' ? 'insert' : kind === 'del' ? 'delete' : 'equal';
 }
 
 export function RedlinePanelContent({
@@ -55,7 +73,9 @@ export function RedlinePanelContent({
   chatId: string;
   revisionCardKeys?: Record<number, string>;
 }) {
-  const [paragraphs, setParagraphs] = useState<RedlineParagraph[] | null>(null);
+  const [paragraphs, setParagraphs] = useState<WireRedlineParagraph[] | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Pending revision-id focus that came in before the paragraphs loaded.
@@ -153,6 +173,18 @@ export function RedlinePanelContent({
     );
   }
 
+  const upstreamParagraphs = useMemo<UpstreamRedlineParagraph[] | null>(() => {
+    if (!paragraphs) return null;
+    return paragraphs.map((p) => ({
+      index: p.index,
+      runs: p.runs.map((r) => ({
+        kind: toUpstreamKind(r.kind),
+        text: r.text,
+        revisionId: r.revisionId,
+      })),
+    }));
+  }, [paragraphs]);
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
@@ -176,81 +208,26 @@ export function RedlinePanelContent({
       </div>
       <div
         ref={containerRef}
-        className="flex-1 space-y-3 overflow-y-auto p-4 text-sm leading-relaxed"
+        className="flex-1 overflow-y-auto p-4 text-sm leading-relaxed"
       >
-        {error && (
-          <p className="text-sm text-destructive">{error}</p>
-        )}
-        {!paragraphs && !error && (
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        {!upstreamParagraphs && !error && (
           <LoadingState>Loading redline…</LoadingState>
         )}
-        {paragraphs && paragraphs.length === 0 && (
-          <p className="text-sm text-muted-foreground">No paragraphs in document.</p>
-        )}
-        {paragraphs?.map((para) => (
-          <p
-            key={para.index}
-            className="whitespace-pre-wrap"
-            data-paragraph-index={para.index}
-          >
-            {para.runs.length === 0 ? (
-              <span className="text-muted-foreground">·</span>
-            ) : (
-              para.runs.map((run, i) => (
-                <RedlineSpan
-                  key={i}
-                  run={run}
-                  onClick={
-                    run.revisionId !== undefined
-                      ? () => handleSpanClick(run.revisionId!)
-                      : undefined
-                  }
-                />
-              ))
-            )}
+        {upstreamParagraphs && upstreamParagraphs.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            No paragraphs in document.
           </p>
-        ))}
+        )}
+        {upstreamParagraphs && upstreamParagraphs.length > 0 && (
+          <RedlineRuns
+            paragraphs={upstreamParagraphs}
+            onRunSelect={(revisionId) =>
+              handleSpanClick(Number(revisionId))
+            }
+          />
+        )}
       </div>
     </div>
-  );
-}
-
-function RedlineSpan({
-  run,
-  onClick,
-}: {
-  run: RedlineRun;
-  onClick?: () => void;
-}) {
-  if (run.kind === 'equal') {
-    return <span>{run.text}</span>;
-  }
-  return (
-    <span
-      role={onClick ? 'button' : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      onClick={onClick}
-      onKeyDown={
-        onClick
-          ? (e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                onClick();
-              }
-            }
-          : undefined
-      }
-      data-revision-id={run.revisionId}
-      className={cn(
-        'rounded-sm px-0.5 transition-colors',
-        run.kind === 'del' &&
-          'bg-destructive/15 text-destructive line-through decoration-destructive/60',
-        run.kind === 'ins' &&
-          'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
-        onClick && 'cursor-pointer hover:ring-1 hover:ring-amber-400/60',
-      )}
-    >
-      {run.text}
-    </span>
   );
 }
