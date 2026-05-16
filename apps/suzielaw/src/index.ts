@@ -99,8 +99,12 @@ import { draftColumnPrompt } from '@teamsuzie/markdown-document';
 import { buildReviewWorkbook } from './reviews-export.js';
 import { runDocumentDiff } from './diff-engine.js';
 import { composeRedlineDocx, redlineDownloadFilename } from './redline-export.js';
-import { extractRedlineParagraphs } from './redline-view.js';
-import { acceptRevision, loadDocx, rejectRevision } from '@teamsuzie/docx';
+import {
+  acceptRevision,
+  extractRedlineParagraphs,
+  loadDocx,
+  rejectRevision,
+} from '@teamsuzie/docx';
 import { draftChatTitle } from './chat-title.js';
 import { db } from './db.js';
 

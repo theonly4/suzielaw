@@ -10,12 +10,14 @@ import {
   PromptCardDescription,
   PromptCardTitle,
   ToolUseStatus,
+  TrackedChangesPanel,
   cn,
   humanSize,
   useAutoResizeTextarea,
   useSelectedModel,
   type ArtifactSnapshot,
   type Persona,
+  type ProposeEditsResult,
   type ToolEvent,
 } from '@teamsuzie/ui';
 import { parseResponse, SENTINEL_OPEN, type Citation } from '@teamsuzie/citations';
@@ -24,9 +26,10 @@ import { useDocSidePanel } from '../components/document-side-panel.js';
 import { useAssistantChats } from '../hooks/use-assistant-chats.js';
 import { PaywallDialog } from '../components/paywall-dialog.js';
 import {
-  TrackedChangesPanel,
-  type ProposeEditsResult,
-} from '../components/tracked-changes-panel.js';
+  loadRedline,
+  redlineDownloadHref,
+  resolveRevisions,
+} from '../lib/redline-api.js';
 
 const SELECTED_MODEL_KEY = 'suzielaw:selected-model';
 
@@ -210,6 +213,12 @@ function MessageItem({
           key={`${message.id}:${result.download_file_id}`}
           result={result}
           chatId={chatKey}
+          onResolve={resolveRevisions}
+          onLoadRedline={loadRedline}
+          downloadHref={redlineDownloadHref(
+            result.download_session_id,
+            result.download_file_id,
+          )}
         />
       ))}
     </div>
