@@ -41,6 +41,11 @@ upstream package first, then `import` from there.
 - Chat-handling helpers (tool-use status, artifact panel, markdown renderer,
   whimsical-verb lists, prettifiers). Add to `@teamsuzie/ui` or
   `@teamsuzie/agent-loop`.
+- Redline / tracked-changes / version-diff rendering. Use
+  `@teamsuzie/ui` `RedlineRuns`, `RedlineSpan`, `VersionDiff`. The local
+  `redline-panel.tsx`, `compare-versions.tsx`'s `DiffPanel`, and
+  `tracked-changes-panel.tsx`'s inline spans are thin shells around these
+  — anything new (different diff shape, new event kind) goes upstream.
 - Document navigation/drafting tools. Add to `@teamsuzie/markdown-document`.
 - DB plumbing helpers. Add to `@teamsuzie/db-sqlite`.
 - Sidekick services (conversion agents, etc.). Add to `apps/agents/*`
