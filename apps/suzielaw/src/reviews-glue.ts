@@ -13,7 +13,7 @@ import type { Request } from 'express';
 import type { CellChatMessage } from '@teamsuzie/grid-review';
 import type { InMemoryFileStore } from './files.js';
 import { convertFileToMarkdown } from './document-tools.js';
-import { rewriteQueryAsHypothetical } from './hyde.js';
+import { rewriteQueryAsHypothetical } from '@teamsuzie/kb';
 import type { WorkspaceRag } from '@teamsuzie/kb';
 import { createTokenMeteredFetch, type TokenBudgetStore } from '@teamsuzie/hosted-demo';
 import { getSessionUser } from './auth.js';
